@@ -185,4 +185,23 @@ bool shared_mutex::try_lock()
 - 如果读写锁当前被使用（或者被一个读线程或者一个写线程），它将直接返回false，而不是block在read条件变量上。
 - 如果获取独占锁（写锁）成功，返回的true。
 
-最后
+最后是unlock方法：
+
+```cpp
+void shared_mutex::unlock()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    w_active = 0;
+    if (r_wait > 0) {
+        read.notify_all();
+    } else if (w_wait > 0) {
+        write.notify_one();
+    }
+}
+```
+
+该函数被一个线程调用来释放写锁。
+
+- 当一个写线程释放读写锁时，它总是可用的；如果有任何线程等待，必须唤醒其中一个。
+- 这里的实现时”读优先“的，首先寻找正在等待的读线程。如果有，将广播read条件变量来唤醒它们。
+- 如果没有等待的读线程，但是有一个以上的写线程等待，通过通知write条件变量来唤醒其中一个。
