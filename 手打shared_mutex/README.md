@@ -93,7 +93,7 @@ shared_mutex::~shared_mutex()
 更是没什么好说的，只是加了一些断言而已。
 
 
-##### 4. shared_mutex类的获取/释放共享锁（读锁）的相关方法。
+##### 3. shared_mutex类的获取/释放共享锁（读锁）的相关方法。
 
 首先是lock_shared方法，为读操作获取共享锁（读锁）。
 ```cpp
@@ -146,7 +146,7 @@ void shared_mutex::unlock_shared()
 该函数实质上是通过减少活跃的读线程数（r_active）颠倒了lock_shared或try_lock_shared的效果。如果不在有活跃的读线程，并且至少有一个线程正在等待写操作，会通知write条件变量来唤醒其中的一个。
 
 
-##### 5. shared_mutex类的获取/释放独占锁（写锁）的相关方法。
+##### 4. shared_mutex类的获取/释放独占锁（写锁）的相关方法。
 
 首先是lock方法，为写操作获取独占锁（写锁）。
 ```cpp
@@ -212,9 +212,9 @@ void shared_mutex::unlock()
 
 ### shared_mutex使用示例
 
-接下来，我们通过一个shared_mutex类的使用示例，介绍shared_mutex类的共享-独占特性，同时进一步探讨一下”读者优先“策略和”写者优先“策略。
+接下来，我们通过一个shared_mutex类的使用示例，介绍shared_mutex类的共享-独占特性。
 
-首先，我们先给出一个简单的读写锁示例：
+首先，我们先给出一个完整的示例代码：
 
 ```cpp
 #include <iostream>
@@ -296,7 +296,7 @@ void thread2()
 }
 ```
 
-示例代码中，包含两个读者线程（main和thread2）和一个写者线程（thread1），编译运行我们的程序，我们可以看到程序的输出如下（考虑到cpu调度的情况，每次结果不一定完全一样）：
+该示例代码中，包含两个读者线程（main和thread2）和一个写者线程（thread1），编译运行我们的程序，我们可以看到程序的输出如下（考虑到cpu调度的情况，每次结果不一定完全一样）：
 
 ```
 11/27/21 14:00:16: parent has read lock
@@ -311,7 +311,7 @@ void thread2()
 
 为了更容易的看清楚程序运行的过程，我们给出时序图（考虑到cpu调度的情况，这只是典型时序之一，但不妨碍我们分析读写锁的特性）：
 
-![SequenceDiagram1](png/SequenceDiagram1.png)
+![shared_mutex_reader_first](png/shared_mutex_reader_first.png)
 
 - 1~2：main线程调用lock_shared获取读锁，由于没有其他线程占用读写锁，获取读锁成功。
 - 3~5：main线程分别创建两个子线程thread1和thread2，main线程创建子线程成功后，就sleep 5秒。
@@ -320,4 +320,10 @@ void thread2()
 - 12~13：main线程从sleep 5秒后唤醒，调用unlock_shared释放读锁，r_active减1，由于thread2还持有读锁，所以rwlock的r_active为1。
 - 14~15：thread2线程从sleep 4秒后唤醒，调用unlock_shared释放读锁，r_active减1，这时r_active变成0，这时会进一步检查是否有写线程等待，发现w_wait为1，这是因为这时thread1线程在step 8阻塞在lock函数上，这时，会通知write条件变量唤醒thread1线程。
 - 16~19：thread1线程从write条件变量的wait中返回，然后检查发现没有任何其他线程占用读写锁，于是成功持有了写锁，rwlock的w_active为1。然后thread1线程sleep 2秒，调用unlock释放写锁，这时，unlock函数实现里，首先检查是否有读线程等待，如果没有读线程等待，才会再检查是否有写线程等待，这就是”读者优先“策略的表现之一。
+
+可以看到，我们目前实现的shared_mutex类是”读者优先“策略的。
+
+***
+
+### shared_mutex实现写者优先
 
