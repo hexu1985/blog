@@ -67,6 +67,7 @@ private:
 
 这里w_active虽然是int类型，其实是表示一个bool标志，因为只能有一个”活动的写线程“（持有写锁），但考虑到内存对齐，这里使用bool还是int，其实是没差别的。
 
+
 ##### 2. shared_mutex类的构造与析构。
 
 首先是构造函数：
@@ -91,6 +92,7 @@ shared_mutex::~shared_mutex()
 ```
 更是没什么好说的，只是加了一些断言而已。
 
+
 ##### 4. shared_mutex类的获取/释放共享锁（读锁）的相关方法。
 
 首先是lock_shared方法，为读操作获取共享锁（读锁）。
@@ -108,7 +110,7 @@ void shared_mutex::lock_shared()
     r_active++;
 }
 ```
-- 如果当前没有写线程是活动的，那么我们就登记r_active成员变量，更新活动的读者线程数+1，并从lock_shared方法返回，表示获取共享锁成功。
+- 如果当前没有写线程是活动的，那么我们就登记r_active成员变量，更新活动的读线程数+1，并从lock_shared方法返回，表示获取共享锁成功。
 - 如果一个写线程当前是活动的（w_active非0），我们就登记r_wait成员变量，更新等待读线程的数量+1，然后wait在read条件变量上（直到写线程释放了锁，并通过read条件变量唤醒了当前线程）。
 - 另外，为了简化实现，这里并没考虑线程wait在read条件变量时，线程被cancel的情况，这种情况下r_wait并不会-1，从而造成数据不一致。对于这种情况的处理，可以参考相关书籍，这里就不在赘述了。
 
@@ -126,9 +128,61 @@ bool shared_mutex::try_lock_shared()
     }
 }
 ```
-逻辑上和lock_shared几乎相同，除了：
+代码逻辑跟lock_shared很像，除了：
 - 当有一个写线程活动时，它将直接返回false，而不是block在read条件变量上。
 - 如果获取共享锁（读锁）成功，返回的true。
 
 最后是unlock_shared方法：
+```cpp
+void shared_mutex::unlock_shared()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    r_active--;
+    if (r_active == 0 && w_wait > 0) {
+        write.notify_one();
+    }
+}
+```
+该函数实质上是通过减少活跃的读线程数（r_active）颠倒了lock_shared或try_lock_shared的效果。如果不在有活跃的读线程，并且至少有一个线程正在等待写操作，会通知write条件变量来唤醒其中的一个。
 
+
+##### 5. shared_mutex类的获取/释放独占锁（写锁）的相关方法。
+
+首先是lock方法，为写操作获取独占锁（写锁）。
+```cpp
+void shared_mutex::lock()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    if (w_active || r_active > 0) {
+        w_wait++;
+        while (w_active || r_active > 0) {
+            write.wait(lock);
+        }
+        w_wait--;
+    }
+    w_active = 1;
+}
+```
+该函数很像lock_shared，除了在write条件变量上等待的谓词条件。
+- 如果当前有任何写线程或读线程是活动的，我们就登记w_wait成员变量，更新等待写线程的数量+1，然后wait在write条件变量上（直到有写线程释放了锁，或者所有的读线程释放了锁，并通过write条件变量唤醒了当前线程）。
+- 否则，那么我们就登记w_active成员变量，更新活动的写线程标志为1（true），并从lock方法返回，表示获取独占锁成功。
+- 另外，为了简化实现，这里并没考虑线程wait在write条件变量时，线程被cancel的情况，这种情况下w_wait并不会-1，从而造成数据不一致。对于这种情况的处理，可以参考相关书籍，这里就不在赘述了。
+
+然后是try_lock方法：
+```cpp
+bool shared_mutex::try_lock()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (w_active || r_active > 0) {
+        return false;
+    } else {
+        w_active = 1;
+        return true;
+    }
+}
+```
+代码逻辑lock很像，除了：
+- 如果读写锁当前被使用（或者被一个读线程或者一个写线程），它将直接返回false，而不是block在read条件变量上。
+- 如果获取独占锁（写锁）成功，返回的true。
+
+最后
