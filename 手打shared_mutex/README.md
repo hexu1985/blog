@@ -38,7 +38,7 @@ std::shared_mutex是在C++17标准中引入的，std::shared_mutex的更完整�
 
 接下来，我们将自己动手实现一个shared_mutex。
 
-首先，先从shared_mutex的成员变量开始：
+##### 首先，先从shared_mutex的成员变量开始：
 
 ```cpp
 class shared_mutex {
@@ -61,9 +61,7 @@ private:
 
 这里w_active虽然是int类型，其实是表示一个bool标志，因为只能有一个”活动的写线程“，但考虑到内存对齐，这里使用bool还是int，其实是没差别的。
 
-***
-
-接下来，我们逐个实现shared_mutex的成员函数。
+##### 接下来，我们逐个实现shared_mutex的成员函数。
 
 首先是构造函数：
 
@@ -75,6 +73,8 @@ shared_mutex::shared_mutex():
 ```
 
 并没有什么需要特别强调的，mutex、read、write这三个成员变量会调用默认构造函数，shared_mutex对象构造完成后，处于未加锁的状态。
+
+***
 
 然后是析构函数：
 
@@ -90,7 +90,9 @@ shared_mutex::~shared_mutex()
 
 更是没什么好说的，只是加了一些断言而已。
 
-接下来是lock_shared，为读操作获取共享锁。
+***
+
+接下来是lock_shared方法，为读操作获取共享锁。
 
 ```cpp
 void shared_mutex::lock_shared()
@@ -107,4 +109,7 @@ void shared_mutex::lock_shared()
 }
 ```
 
-如果一个写线程当前是活动的（w_active非0），我们等待它广播read条件变量。r_wait成员记录等待读线程的数量。如果当前没有写线程是活动的（或者写线程释放了锁，并通过read条件变量唤醒了当前线程），那么我们就把r_active加1，并从lock_shared返回，表示获取共享锁成功。另外，为了简化实现，这里并没考虑线程wait在read条件变量时，线程被cancel的情况，这种情况下r_wait并不会减一，造成数据不一致。对于这种情况的处理，可以参考相关书籍，这里就不在赘述了。
+- 如果当前没有写线程是活动的（或者写线程释放了锁，并通过read条件变量唤醒了当前线程），那么我们就把登记r_active成员变量，更新活动的读者线程数+1，并从lock_shared返回，表示获取共享锁成功。
+- 如果一个写线程当前是活动的（w_active非0），我们就登记r_wait成员变量，更新等待读线程的数量+1，然后wait在read条件变量上。
+- 另外，为了简化实现，这里并没考虑线程wait在read条件变量时，线程被cancel的情况，这种情况下r_wait并不会-1，从而造成数据不一致。对于这种情况的处理，可以参考相关书籍，这里就不在赘述了。
+
