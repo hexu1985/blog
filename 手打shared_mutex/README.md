@@ -452,3 +452,8 @@ Sat Nov 27 20:46:47 2021: second child releases read lock
 - gcc version 9.3.0的实现中，shared_mutex是读优先的
 - gcc version 10.2.0的实现中，shared_mutex是写优先的
 
+##### 4. 参考引用
+
+- UNIX网络编程 卷2：进程间通信 第2版（UNIX Network Programming Volume 2: Interprocess Communications, Second Edition）
+- POSIX多线程程序设计（Programming With POSIX Threads）
+- 读者写者问题（读者优先 写者优先 读写公平）：<https://www.cnblogs.com/wwqdata/p/12986893.html> 
