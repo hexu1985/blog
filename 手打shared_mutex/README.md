@@ -205,3 +205,119 @@ void shared_mutex::unlock()
 - 当一个写线程释放读写锁时，它总是可用的；如果有任何线程等待，必须唤醒其中一个。
 - 这里的实现时”读优先“的，首先寻找正在等待的读线程。如果有，将广播read条件变量来唤醒它们。
 - 如果没有等待的读线程，但是有一个以上的写线程等待，通过通知write条件变量来唤醒其中一个。
+
+##### 至此，shared_mutex类的完整实现就介绍完了。
+
+***
+
+### shared_mutex使用示例
+
+接下来，我们通过一个shared_mutex类的使用示例，介绍shared_mutex类的共享-独占特性，同时进一步探讨一下”读者优先“策略和”写者优先“策略。
+
+首先，我们先给出一个简单的读写锁示例：
+
+```cpp
+#include <iostream>
+#include <string>
+#include <chrono>
+#include <iomanip>
+#include <thread>
+#include <shared_mutex>
+#include "shared_mutex.hpp"
+
+mini_stl::shared_mutex rwlock;
+
+void thread1();
+void thread2();
+
+inline
+std::ostream& operator<<(std::ostream &os,
+        const std::chrono::time_point<std::chrono::system_clock> &t)
+{
+    const auto tt (std::chrono::system_clock::to_time_t(t));
+    const auto loct (std::localtime(&tt));
+    return os << std::put_time(loct, "%c");
+}
+
+inline
+std::chrono::time_point<std::chrono::system_clock> gf_time()
+{
+    return std::chrono::system_clock::now();
+}
+
+inline
+void sleep(int nsecs)
+{
+    std::this_thread::sleep_for(std::chrono::seconds(nsecs));
+}
+
+int main(int argc, char *argv[])
+{
+    std::thread thr1, thr2;
+
+    rwlock.lock_shared();   /* parent read locks entire file */
+    std::cout << gf_time() << ": parent has read lock" << std::endl;
+
+    thr1 = std::thread(&thread1);
+    thr2 = std::thread(&thread2);
+
+	/* 4parent */
+    sleep(5);
+    rwlock.unlock_shared();
+    std::cout << gf_time() << ": parent releases read lock" << std::endl;
+
+    thr1.join();
+    thr2.join();
+
+    return 0;
+}
+
+void thread1()
+{
+    sleep(1);
+    std::cout << gf_time() << ": first child tries to obtain write lock" << std::endl;
+    rwlock.lock();  /* this should block */
+    std::cout << gf_time() << ": first child obtains write lock" << std::endl;
+    sleep(2);
+    rwlock.unlock();
+    std::cout << gf_time() << ": first child releases write lock" << std::endl;
+}
+
+void thread2()
+{
+    /* 4second child */
+    sleep(3);
+    std::cout << gf_time() << ": second child tries to obtain read lock" << std::endl;
+    rwlock.lock_shared();
+    std::cout << gf_time() << ": second child obtains read lock" << std::endl;
+    sleep(4);
+    rwlock.unlock_shared();
+    std::cout << gf_time() << ": second child releases read lock" << std::endl;
+}
+```
+
+示例代码中，包含两个读者线程（main和thread2）和一个写者线程（thread1），编译运行我们的程序，我们可以看到程序的输出如下（考虑到cpu调度的情况，每次结果不一定完全一样）：
+
+```
+11/27/21 14:00:16: parent has read lock
+11/27/21 14:00:17: first child tries to obtain write lock
+11/27/21 14:00:19: second child tries to obtain read lock
+11/27/21 14:00:19: second child obtains read lock
+11/27/21 14:00:21: parent releases read lock
+11/27/21 14:00:23: second child releases read lock
+11/27/21 14:00:23: first child obtains write lock
+11/27/21 14:00:25: first child releases write lock
+```
+
+为了更容易的看清楚程序运行的过程，我们给出时序图（考虑到cpu调度的情况，这只是典型时序之一，但不妨碍我们分析读写锁的特性）：
+
+![SequenceDiagram1](png/SequenceDiagram1.png)
+
+- 1~2：main线程调用lock_shared获取读锁，由于没有其他线程占用读写锁，获取读锁成功。
+- 3~5：main线程分别创建两个子线程thread1和thread2，main线程创建子线程成功后，就sleep 5秒。
+- 6, 8：thread1线程sleep 1秒后，调用lock获取写锁，但这时候由于main线程持有着读锁，所以thread1线程的lock函数block了，rwlock的w_wait为1。
+- 7, 9, 10, 11：thread2线程sleep 3秒后，调用lock获取读锁，这时候由于main线程持有着读锁，所以thread2也成功持有了读锁，rwlock的r_active为2，thread2线程紧接着sleep 4秒。
+- 12~13：main线程从sleep 5秒后唤醒，调用unlock_shared释放读锁，r_active减1，由于thread2还持有读锁，所以rwlock的r_active为1。
+- 14~15：thread2线程从sleep 4秒后唤醒，调用unlock_shared释放读锁，r_active减1，这时r_active变成0，这时会进一步检查是否有写线程等待，发现w_wait为1，这是因为这时thread1线程在step 8阻塞在lock函数上，这时，会通知write条件变量唤醒thread1线程。
+- 16~19：thread1线程从write条件变量的wait中返回，然后检查发现没有任何其他线程占用读写锁，于是成功持有了写锁，rwlock的w_active为1。然后thread1线程sleep 2秒，调用unlock释放写锁，这时，unlock函数实现里，首先检查是否有读线程等待，如果没有读线程等待，才会再检查是否有写线程等待，这就是”读者优先“策略的表现之一。
+
