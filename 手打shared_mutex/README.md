@@ -399,14 +399,14 @@ void shared_mutex::unlock()
 我们可以用写者优先策略的shared_mutex类，再次编译运行之前的示例代码，查看打印输出内容：
 
 ```
-at Nov 27 20:46:36 2021: parent has read lock
-Sat Nov 27 20:46:37 2021: first child tries to obtain write lock
-Sat Nov 27 20:46:39 2021: second child tries to obtain read lock
-Sat Nov 27 20:46:41 2021: parent releases read lock
-Sat Nov 27 20:46:41 2021: first child obtains write lock
-Sat Nov 27 20:46:43 2021: first child releases write lock
-Sat Nov 27 20:46:43 2021: second child obtains read lock
-Sat Nov 27 20:46:47 2021: second child releases read lock
+11/27/21 14:00:46: parent has read lock
+11/27/21 14:00:47: first child tries to obtain write lock
+11/27/21 14:00:49: second child tries to obtain read lock
+11/27/21 14:00:51: parent releases read lock
+11/27/21 14:00:51: first child obtains write lock
+11/27/21 14:00:53: first child releases write lock
+11/27/21 14:00:53: second child obtains read lock
+11/27/21 14:00:57: second child releases read lock
 ```
 
 你有发现什么不同吗？还是老规矩，我们给出时序图：
