@@ -436,3 +436,10 @@ Sat Nov 27 20:46:47 2021: second child releases read lock
 - 当有一个写者正在写时或在阻塞队列时应当阻塞读者进程的读操作，直到所有写者进程完成写操作时放开读者进程。
 - 当没有写者进程时读者进程应该能够同时读取文件。
 
+##### 3. C++17标准中的shared_mutex到底是读优先还是写优先？
+
+据我所知，C++17标准中并没有限定shared_mutex实现策略是读优先还是写优先，而是由编译器厂商决定，即由实现定义的。这一点很像POSIX的读写锁接口（pthread_rwlock_*相关接口）。我随便找了两个版本的g++做了实验，结果表明：
+
+- gcc version 9.3.0的实现中，shared_mutex是读优先的
+- gcc version 10.2.0的实现中，shared_mutex是写优先的
+
