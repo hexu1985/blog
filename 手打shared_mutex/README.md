@@ -42,7 +42,7 @@ std::shared_mutex是在C++17标准中引入的，std::shared_mutex的更完整�
 
 ### shared_mutex实现
 
-接下来，我们将自己动手实现一个shared_mutex。
+接下来，我们将自己动手实现一个shared_mutex类。
 
 ##### 1. shared_mutex类的数据结构
 
@@ -316,7 +316,7 @@ void thread2()
 - 1~2：main线程调用lock_shared获取读锁，由于没有其他线程占用读写锁，获取读锁成功。
 - 3~5：main线程分别创建两个子线程thread1和thread2，main线程创建子线程成功后，就sleep 5秒。
 - 6, 8：thread1线程sleep 1秒后，调用lock获取写锁，但这时候由于main线程持有着读锁，所以thread1线程的lock函数block了，rwlock的w_wait为1。
-- 7, 9, 10, 11：thread2线程sleep 3秒后，调用lock获取读锁，这时候由于main线程持有着读锁，所以thread2也成功持有了读锁，rwlock的r_active为2，thread2线程紧接着sleep 4秒。
+- 7, 9, 10, 11：thread2线程sleep 3秒后，调用lock获取读锁，这时候由于main线程持有着读锁，所以thread2线程也成功持有了读锁，rwlock的r_active为2，thread2线程紧接着sleep 4秒。
 - 12~13：main线程从sleep 5秒后唤醒，调用unlock_shared释放读锁，r_active减1，由于thread2还持有读锁，所以rwlock的r_active为1。
 - 14~15：thread2线程从sleep 4秒后唤醒，调用unlock_shared释放读锁，r_active减1，这时r_active变成0，这时会进一步检查是否有写线程等待，发现w_wait为1，这是因为这时thread1线程在step 8阻塞在lock函数上，这时，会通知write条件变量唤醒thread1线程。
 - 16~19：thread1线程从write条件变量的wait中返回，然后检查发现没有任何其他线程占用读写锁，于是成功持有了写锁，rwlock的w_active为1。然后thread1线程sleep 2秒，调用unlock释放写锁，这时，unlock函数实现里，首先检查是否有读线程等待，如果没有读线程等待，才会再检查是否有写线程等待，这就是”读者优先“策略的表现之一。
@@ -325,5 +325,114 @@ void thread2()
 
 ***
 
-### shared_mutex实现写者优先
+### shared_mutex写者优先
+
+接下来，我们介绍如何将现有实现的shared_mutex类改写成”写者优先“策略的。
+
+##### 1. 调整lock_shared逻辑
+
+为实现写线程优先，当有正在等待的写线程（w_wait>0）时，新的读线程的请求必须被阻塞，而不仅仅是在有活动的写线程时（我们已实现的方式）。
+
+```cpp
+void shared_mutex::lock_shared()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    if (w_active || w_wait > 0) {			// <<<<<< 修改逻辑支持写优先
+        r_wait++;
+        while (w_active || w_wait > 0) {	// <<<<<< 修改逻辑支持写优先
+            read.wait(lock);
+        }
+        r_wait--;
+    }
+    r_active++;
+}
+```
+
+##### 2. 调整try_lock_shared逻辑
+
+同样，该函数必须也被修改以实现写线程优先，当有一个写线程活动时，或当一个写线程正在等待时，都会返回false。
+
+```cpp
+bool shared_mutex::try_lock_shared()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (w_active || w_wait > 0) {			// <<<<<< 修改逻辑支持写优先
+        return false;
+    } else {
+        r_active++;
+        return true;
+    }
+}
+```
+
+##### 3. 调整unlock逻辑
+
+要实现写线程优先，只需颠倒两个if测试的先后顺序，即唤醒一个等待的写线程（如果有的话），然后再寻找等待的读线程。
+
+```cpp
+void shared_mutex::unlock()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    w_active = 0;
+    if (w_wait > 0) {					// <<<<<< 修改逻辑支持写优先
+        write.notify_one();
+    } else if (r_wait > 0) {			// <<<<<< 修改逻辑支持写优先
+        read.notify_all();
+    }
+}
+```
+
+##### 至此，我们就完成了shared_mutex从读者优先策略，转变成写者优先。
+
+我们可以用写者优先策略的shared_mutex类，再次编译运行之前的示例代码，查看打印输出内容：
+
+```
+at Nov 27 20:46:36 2021: parent has read lock
+Sat Nov 27 20:46:37 2021: first child tries to obtain write lock
+Sat Nov 27 20:46:39 2021: second child tries to obtain read lock
+Sat Nov 27 20:46:41 2021: parent releases read lock
+Sat Nov 27 20:46:41 2021: first child obtains write lock
+Sat Nov 27 20:46:43 2021: first child releases write lock
+Sat Nov 27 20:46:43 2021: second child obtains read lock
+Sat Nov 27 20:46:47 2021: second child releases read lock
+```
+
+你有发现什么不同吗？还是老规矩，我们给出时序图：
+
+![shared_mutex_writer_first](png/shared_mutex_writer_first.png)
+
+- 1~2：main线程调用lock_shared获取读锁，由于没有其他线程占用读写锁，获取读锁成功。
+- 3~5：main线程分别创建两个子线程thread1和thread2，main线程创建子线程成功后，就sleep 5秒。
+- 6, 8：thread1线程sleep 1秒后，调用lock获取写锁，但这时候由于main线程持有着读锁，所以thread1线程的lock函数block了，rwlock的w_wait为1。
+- 7, 9：thread2线程sleep 3秒后，调用lock获取读锁，这时候虽然main线程持有着读锁，但thread1线程已经等待着写操作（w_wait为1），所以thread2线程的lock_shared函数也block了，rwlock的r_wait为1。
+- 10~11：main线程从sleep 5秒后唤醒，调用unlock_shared释放读锁，r_active减1，这时r_active为0，由于有写线程等待（thread1线程，w_wait为1），所以优先通知write条件变量唤醒thread1线程。
+- 12, 13, 14, 15：thread1线程从write条件变量的wait中返回，然后检查发现没有任何其他线程占用读写锁，于是成功持有了写锁（对应step 8），rwlock的w_active为1。然后thread1线程sleep 2秒，调用unlock释放写锁，这时，unlock函数实现里，首先检查是否有写线程等待，如果没有写线程等待，才会再检查是否有读线程等待，这就是”写者优先“策略的表现之一。由于这时候，thread2线程还wait在read条件变量（r_wait为1），所以会通知read条件变量唤醒thread2线程。
+- 16~19：thread2线程从read条件变量的wait中返回，然后检查发现没有任何其他线程占用读写锁，于是成功持有了读锁（对应step 9），rwlock的r_active+1。然后thread2线程sleep 2秒，调用unlock_shared释放读锁。
+
+可以看到，我们改写实现的shared_mutex类是”写者优先“策略的。
+
+***
+
+### 题外话：
+
+##### 1. 什么是读者优先？
+
+即使写者发出了请求写的信号，但是只要还有读者在读取内容，就还允许其他读者继续读取内容，直到所有读者结束读取，才真正开始写
+
+- 有读者在读后面来的读者可以直接进入临界区，而已经在等待的写者继续等待直到没有任何一个读者时。
+
+- 读者之间不互斥，写者之间互斥，只能一个写，可以多个读，
+
+- 读者写者之间互斥，有写者写则不能有读者读
+- 如果在读访问非常频繁的场合，有可能造成写进程一直无法访问文件的局面
+
+##### 2. 什么是写者优先？
+
+如果有写者申请写文件，在申请之前已经开始读取文件的可以继续读取，但是如果再有读者申请读取文件，则不能够读取，只有在所有的写者写完之后才可以读取
+
+- 写者线程的优先级高于读者线程。
+
+- 当有写者到来时应该阻塞读者线程的队列。
+- 当有一个写者正在写时或在阻塞队列时应当阻塞读者进程的读操作，直到所有写者进程完成写操作时放开读者进程。
+- 当没有写者进程时读者进程应该能够同时读取文件。
 
